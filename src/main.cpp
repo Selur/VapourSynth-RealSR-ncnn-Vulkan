@@ -9,8 +9,8 @@
 
 #include "realsr.hpp"
 
-#include "VapourSynth.h"
-#include "VSHelper.h"
+#include "VapourSynth4.h"
+#include "VSHelper4.h"
 
 class Semaphore
 {
@@ -42,7 +42,7 @@ public:
 
 struct FilterData
 {
-    VSNodeRef* node;
+    VSNode* node;
     const VSVideoInfo* vi;
     int target_width, target_height;
     RealSR* realsr;
@@ -53,9 +53,9 @@ static std::mutex g_lock{};
 static int g_filter_instance_count = 0;
 static std::map<int, Semaphore*> g_gpu_semaphore;
 
-static void process(const VSFrameRef* src, VSFrameRef* dst, const FilterData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept
+static void process(const VSFrame* src, VSFrame* dst, const FilterData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept
 {
-    if (d->vi->format->colorFamily == cmRGB)
+    if (d->vi->format.colorFamily == cfRGB)
     {
         int src_width = vsapi->getFrameWidth(src, 0);
         int src_height = vsapi->getFrameHeight(src, 0);
@@ -76,18 +76,9 @@ static void process(const VSFrameRef* src, VSFrameRef* dst, const FilterData* co
     }
 }
 
-static void VS_CC filterInit(VSMap* in, VSMap* out, void** instanceData, VSNode* node, VSCore* core, const VSAPI* vsapi)
+static const VSFrame* VS_CC filterGetFrame(int n, int activationReason, void* instanceData, void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi)
 {
-    FilterData* d = static_cast<FilterData*>(*instanceData);
-    VSVideoInfo dst_vi = (VSVideoInfo)* (d->vi);
-    dst_vi.width = d->target_width;
-    dst_vi.height = d->target_height;
-    vsapi->setVideoInfo(&dst_vi, 1, node);
-}
-
-static const VSFrameRef* VS_CC filterGetFrame(int n, int activationReason, void** instancData, void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi)
-{
-    const FilterData* d = static_cast<const FilterData*>(*instancData);
+    const FilterData* d = static_cast<const FilterData*>(instanceData);
 
     if (activationReason == arInitial)
     {
@@ -95,8 +86,8 @@ static const VSFrameRef* VS_CC filterGetFrame(int n, int activationReason, void*
     }
     else if (activationReason == arAllFramesReady)
     {
-        const VSFrameRef* src = vsapi->getFrameFilter(n, d->node, frameCtx);
-        VSFrameRef* dst = vsapi->newVideoFrame(d->vi->format, d->target_width, d->target_height, src, core);
+        const VSFrame* src = vsapi->getFrameFilter(n, d->node, frameCtx);
+        VSFrame* dst = vsapi->newVideoFrame(&d->vi->format, d->target_width, d->target_height, src, core);
 
         process(src, dst, d, vsapi);
 
@@ -133,7 +124,7 @@ static void VS_CC filterCreate(const VSMap* in, VSMap* out, void* userData, VSCo
     std::unique_ptr<FilterData> d = std::make_unique<FilterData>();
     int err;
 
-    d->node = vsapi->propGetNode(in, "clip", 0, nullptr);
+    d->node = vsapi->mapGetNode(in, "clip", 0, nullptr);
     d->vi = vsapi->getVideoInfo(d->node);
 
     {
@@ -149,12 +140,12 @@ static void VS_CC filterCreate(const VSMap* in, VSMap* out, void* userData, VSCo
 
     try
     {
-        if (!isConstantFormat(d->vi) ||
-            d->vi->format->sampleType == stInteger ||
-            (d->vi->format->sampleType == stFloat && d->vi->format->bitsPerSample != 32))
+        if (!vsh::isConstantVideoFormat(d->vi) ||
+            d->vi->format.sampleType == stInteger ||
+            (d->vi->format.sampleType == stFloat && d->vi->format.bitsPerSample != 32))
             throw std::string{ "only constant format 32 bits float input supported" };
 
-        int scale = int64ToIntS(vsapi->propGetInt(in, "scale", 0, &err));
+        int scale = vsh::int64ToIntS(vsapi->mapGetInt(in, "scale", 0, &err));
         if (err)
             scale = 4;
         if (scale != 4)
@@ -164,11 +155,11 @@ static void VS_CC filterCreate(const VSMap* in, VSMap* out, void* userData, VSCo
         d->target_height = d->vi->height * scale;
 
         // Model path
-        const std::string pluginPath{ vsapi->getPluginPath(vsapi->getPluginById("com.vapoursynth.realsrnv", core)) };
+        const std::string pluginPath{ vsapi->getPluginPath(vsapi->getPluginByID("com.vapoursynth.realsrnv", core)) };
         std::string paramPath{ pluginPath.substr(0, pluginPath.find_last_of('/')) };
         std::string modelPath{ pluginPath.substr(0, pluginPath.find_last_of('/')) };
         
-        int model = int64ToIntS(vsapi->propGetInt(in, "model", 0, &err));
+        int model = vsh::int64ToIntS(vsapi->mapGetInt(in, "model", 0, &err));
         if (err)
             model = 1;
         
@@ -192,20 +183,20 @@ static void VS_CC filterCreate(const VSMap* in, VSMap* out, void* userData, VSCo
             throw std::string{ "can't open model file" };
 
         // GPU id
-        int gpuId = int64ToIntS(vsapi->propGetInt(in, "gpu_id", 0, &err));
+        int gpuId = vsh::int64ToIntS(vsapi->mapGetInt(in, "gpu_id", 0, &err));
         if (err)
             gpuId = 0;
         if (gpuId < 0 || gpuId >= ncnn::get_gpu_count())
             throw std::string{ "invalid 'gpu_id'" };
 
         // Tile size
-        int tilesize_x = int64ToIntS(vsapi->propGetInt(in, "tilesize_x", 0, &err));
+        int tilesize_x = vsh::int64ToIntS(vsapi->mapGetInt(in, "tilesize_x", 0, &err));
         if (err)
             tilesize_x = 100;
         if (tilesize_x != 0 && tilesize_x < 32)
             throw std::string{ "tilesize_x must be >= 32 or set as 0" };
 
-        int tilesize_y = int64ToIntS(vsapi->propGetInt(in, "tilesize_y", 0, &err));
+        int tilesize_y = vsh::int64ToIntS(vsapi->mapGetInt(in, "tilesize_y", 0, &err));
         if (err)
             tilesize_y = tilesize_x;
         if (tilesize_y != 0 && tilesize_y < 32)
@@ -237,19 +228,19 @@ static void VS_CC filterCreate(const VSMap* in, VSMap* out, void* userData, VSCo
         }
 
         int gpuThread;
-        int customGpuThread = int64ToIntS(vsapi->propGetInt(in, "gpu_thread", 0, &err));
+        int customGpuThread = vsh::int64ToIntS(vsapi->mapGetInt(in, "gpu_thread", 0, &err));
         if (customGpuThread > 0)
             gpuThread = customGpuThread;
         else
-            gpuThread = int64ToIntS(ncnn::get_gpu_info(gpuId).transfer_queue_count());
-        gpuThread = std::min(gpuThread, int64ToIntS(ncnn::get_gpu_info(gpuId).compute_queue_count()));
+            gpuThread = vsh::int64ToIntS(ncnn::get_gpu_info(gpuId).transfer_queue_count());
+        gpuThread = std::min(gpuThread, vsh::int64ToIntS(ncnn::get_gpu_info(gpuId).compute_queue_count()));
 
         std::lock_guard<std::mutex> guard(g_lock);
         if (!g_gpu_semaphore.count(gpuId))
             g_gpu_semaphore.insert(std::pair<int, Semaphore*>(gpuId, new Semaphore(gpuThread)));
         d->gpuSemaphore = g_gpu_semaphore.at(gpuId);
 
-        bool tta = !!vsapi->propGetInt(in, "tta", 0, &err);
+        bool tta = !!vsapi->mapGetInt(in, "tta", 0, &err);
 
         d->realsr = new RealSR(gpuId, tta);
         d->realsr->scale = scale;
@@ -268,26 +259,31 @@ static void VS_CC filterCreate(const VSMap* in, VSMap* out, void* userData, VSCo
                 ncnn::destroy_gpu_instance();
         }
 
-        vsapi->setError(out, ("RealSR: " + error).c_str());
+        vsapi->mapSetError(out, ("RealSR: " + error).c_str());
         vsapi->freeNode(d->node);
         return;
     }
 
-    vsapi->createFilter(in, out, "RealSR", filterInit, filterGetFrame, filterFree, fmParallel, 0, d.release(), core);
+    VSVideoInfo dst_vi = *d->vi;
+    dst_vi.width = d->target_width;
+    dst_vi.height = d->target_height;
+    VSFilterDependency deps[] = { { d->node, rpStrictSpatial } };
+    vsapi->createVideoFilter(out, "RealSR", &dst_vi, filterGetFrame, filterFree, fmParallel, deps, 1, d.release(), core);
 }
 
-VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin* plugin)
+VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI* vspapi)
 {
-    configFunc("com.vapoursynth.realsrnv", "rsnv", "RealSR ncnn Vulkan plugin", VAPOURSYNTH_API_VERSION, 1, plugin);
+    vspapi->configPlugin("com.vapoursynth.realsrnv", "rsnv", "RealSR ncnn Vulkan plugin", VS_MAKE_VERSION(1, 1), VAPOURSYNTH_API_VERSION, 0, plugin);
 
-    registerFunc("RealSR",
-                 "clip:clip;"
-                 "scale:int:opt;"
-                 "tilesize_x:int:opt;"
-                 "tilesize_y:int:opt;"
-                 "model:int:opt;"
-                 "gpu_id:int:opt;"
-                 "gpu_thread:int:opt;"
-                 "tta:int:opt",
-                 filterCreate, 0, plugin);
+    vspapi->registerFunction("RealSR",
+                             "clip:vnode;"
+                             "scale:int:opt;"
+                             "tilesize_x:int:opt;"
+                             "tilesize_y:int:opt;"
+                             "model:int:opt;"
+                             "gpu_id:int:opt;"
+                             "gpu_thread:int:opt;"
+                             "tta:int:opt;",
+                             "clip:vnode;",
+                             filterCreate, nullptr, plugin);
 }

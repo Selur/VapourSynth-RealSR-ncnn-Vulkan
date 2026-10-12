@@ -51,7 +51,8 @@ int RealSR::load(const std::string& parampath, const std::string& modelpath)
 #endif
 
         {
-            static std::vector<uint32_t> spirv;
+            // Per instance: the SPIR-V depends on tta_mode and on the options of this GPU.
+            std::vector<uint32_t> spirv;
             static ncnn::Mutex lock;
 
             ncnn::MutexLockGuard guard(lock);
@@ -69,7 +70,8 @@ int RealSR::load(const std::string& parampath, const std::string& modelpath)
         }
 
         {
-            static std::vector<uint32_t> spirv;
+            // Per instance: the SPIR-V depends on tta_mode and on the options of this GPU.
+            std::vector<uint32_t> spirv;
             static ncnn::Mutex lock;
 
             ncnn::MutexLockGuard gurad(lock);
