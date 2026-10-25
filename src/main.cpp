@@ -55,25 +55,22 @@ static std::map<int, Semaphore*> g_gpu_semaphore;
 
 static void process(const VSFrame* src, VSFrame* dst, const FilterData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept
 {
-    if (d->vi->format.colorFamily == cfRGB)
-    {
-        int src_width = vsapi->getFrameWidth(src, 0);
-        int src_height = vsapi->getFrameHeight(src, 0);
-        int src_stirde = vsapi->getStride(src, 0) / sizeof(float);
-        int dst_stride = vsapi->getStride(dst, 0) / sizeof(float);
+    int src_width = vsapi->getFrameWidth(src, 0);
+    int src_height = vsapi->getFrameHeight(src, 0);
+    int src_stride = vsapi->getStride(src, 0) / sizeof(float);
+    int dst_stride = vsapi->getStride(dst, 0) / sizeof(float);
 
-        const float* srcpR = reinterpret_cast<const float*>(vsapi->getReadPtr(src, 0));
-        const float* srcpG = reinterpret_cast<const float*>(vsapi->getReadPtr(src, 1));
-        const float* srcpB = reinterpret_cast<const float*>(vsapi->getReadPtr(src, 2));
+    const float* srcpR = reinterpret_cast<const float*>(vsapi->getReadPtr(src, 0));
+    const float* srcpG = reinterpret_cast<const float*>(vsapi->getReadPtr(src, 1));
+    const float* srcpB = reinterpret_cast<const float*>(vsapi->getReadPtr(src, 2));
 
-        float* VS_RESTRICT dstpR = reinterpret_cast<float*>(vsapi->getWritePtr(dst, 0));
-        float* VS_RESTRICT dstpG = reinterpret_cast<float*>(vsapi->getWritePtr(dst, 1));
-        float* VS_RESTRICT dstpB = reinterpret_cast<float*>(vsapi->getWritePtr(dst, 2));
+    float* VS_RESTRICT dstpR = reinterpret_cast<float*>(vsapi->getWritePtr(dst, 0));
+    float* VS_RESTRICT dstpG = reinterpret_cast<float*>(vsapi->getWritePtr(dst, 1));
+    float* VS_RESTRICT dstpB = reinterpret_cast<float*>(vsapi->getWritePtr(dst, 2));
 
-        d->gpuSemaphore->wait();
-        d->realsr->process(srcpR, srcpG, srcpB, dstpR, dstpG, dstpB, src_width, src_height, src_stirde, dst_stride);
-        d->gpuSemaphore->signal();
-    }
+    d->gpuSemaphore->wait();
+    d->realsr->process(srcpR, srcpG, srcpB, dstpR, dstpG, dstpB, src_width, src_height, src_stride, dst_stride);
+    d->gpuSemaphore->signal();
 }
 
 static const VSFrame* VS_CC filterGetFrame(int n, int activationReason, void* instanceData, void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi)
@@ -140,10 +137,9 @@ static void VS_CC filterCreate(const VSMap* in, VSMap* out, void* userData, VSCo
 
     try
     {
-        if (!vsh::isConstantVideoFormat(d->vi) ||
-            d->vi->format.sampleType == stInteger ||
-            (d->vi->format.sampleType == stFloat && d->vi->format.bitsPerSample != 32))
-            throw std::string{ "only constant format 32 bits float input supported" };
+        if (!vsh::isConstantVideoFormat(d->vi) || d->vi->format.colorFamily != cfRGB ||
+            d->vi->format.sampleType != stFloat || d->vi->format.bitsPerSample != 32)
+            throw std::string{ "only constant format 32 bits float RGB input supported" };
 
         int scale = vsh::int64ToIntS(vsapi->mapGetInt(in, "scale", 0, &err));
         if (err)
@@ -156,8 +152,8 @@ static void VS_CC filterCreate(const VSMap* in, VSMap* out, void* userData, VSCo
 
         // Model path
         const std::string pluginPath{ vsapi->getPluginPath(vsapi->getPluginByID("com.vapoursynth.realsrnv", core)) };
-        std::string paramPath{ pluginPath.substr(0, pluginPath.find_last_of('/')) };
-        std::string modelPath{ pluginPath.substr(0, pluginPath.find_last_of('/')) };
+        std::string paramPath{ pluginPath.substr(0, pluginPath.find_last_of("/\\")) };
+        std::string modelPath{ pluginPath.substr(0, pluginPath.find_last_of("/\\")) };
         
         int model = vsh::int64ToIntS(vsapi->mapGetInt(in, "model", 0, &err));
         if (err)

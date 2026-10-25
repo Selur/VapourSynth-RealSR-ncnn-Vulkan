@@ -61,6 +61,7 @@ def main():
 
     clip = core.std.BlankClip(width=96, height=64, format=vs.RGBS, length=2, color=[0.2, 0.5, 0.8])
     expect_error(lambda: core.rsnv.RealSR(clip.resize.Point(format=vs.RGB24)), "integer input rejected", "32 bits float")
+    expect_error(lambda: core.rsnv.RealSR(clip.resize.Point(format=vs.YUV444PS, matrix_s="709")), "float YUV input rejected", "float RGB")
     expect_error(lambda: core.rsnv.RealSR(clip, scale=2), "scale 2 rejected", "4 scale")
     expect_error(lambda: core.rsnv.RealSR(clip, model=2), "model 2 rejected", "0 or 1")
 
